@@ -5,7 +5,6 @@ import tempfile
 import os
 from ultralytics import YOLO
 import math
-import plotly.graph_objects as go
 
 # إعداد Streamlit
 st.set_page_config(page_title="Swimmer Analysis", layout="wide")
@@ -14,7 +13,6 @@ st.markdown("---")
 
 
 def iou(boxA, boxB):
-    # boxes as [x1,y1,x2,y2]
     xA = max(boxA[0], boxB[0])
     yA = max(boxA[1], boxB[1])
     xB = min(boxA[2], boxB[2])
@@ -51,7 +49,6 @@ def calculate_speed_from_positions(positions, pool_length, fps):
         return 0.0
 
 
-# 🔥 دالة Detection بالتوالي (ترجع قائمة detections مع display_id)
 def detect_with_fallback(frame, expected_min=1):
     models = ["yolov8n-pose.pt", "yolov8m-pose.pt", "yolov8l-pose.pt"]
     detections = []
@@ -78,25 +75,22 @@ def detect_with_fallback(frame, expected_min=1):
             if conf < 0.3:
                 continue
             x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
-            # هنا لا نعتمد على box.id لأن predict قد لا يعيد id (غير track)
             detections.append({
-                'display_id': None,        # نملأ بعدين
+                'display_id': None,
                 'bbox': [int(x1), int(y1), int(x2), int(y2)],
                 'confidence': conf
             })
 
         if len(detections) >= expected_min:
-            chosen_model = model  # نحتفظ بالكائن model لاستخدامه لاحقًا لو احتجنا
+            chosen_model = model
             break
 
-    # اعطاء display ids مرتبة من 1..N
     for i, d in enumerate(detections, start=1):
         d['display_id'] = i
 
     return detections, chosen_model
 
 
-# تعديل: track_people سوف يأخذ selected_bbox (من الاختيار العرضي) ويبحث عن track id حقيقي من tracker
 def track_people(video_path, model, selected_bbox, pool_length, match_iou_threshold=0.4, search_frames=10):
     tracked_results = []
     target_positions = []
@@ -121,7 +115,6 @@ def track_people(video_path, model, selected_bbox, pool_length, match_iou_thresh
         frame_people = []
         boxes = result.boxes
         if boxes is not None:
-            # boxes may have multiple entries; iterate
             for b_idx, box in enumerate(boxes):
                 if int(box.cls[0]) != 0:
                     continue
@@ -138,12 +131,10 @@ def track_people(video_path, model, selected_bbox, pool_length, match_iou_thresh
                     'confidence': conf
                 })
 
-                # لو ما عندناش target_track_id بعد: حاول نطابق selected_bbox مع هذا البوكس
                 if target_track_id is None and frame_count <= search_frames:
                     score = iou(selected_bbox, bbox_curr)
                     if score >= match_iou_threshold:
                         target_track_id = track_id
-                        # نضيف نقطة بداية فورية
                         center_x = (x1 + x2) / 2
                         center_y = (y1 + y2) / 2
                         target_positions.append({
@@ -153,7 +144,6 @@ def track_people(video_path, model, selected_bbox, pool_length, match_iou_thresh
                             'y': center_y
                         })
 
-                # لو عندنا target_track_id -> اجمع مواضع كل إطار للـtrack
                 if target_track_id is not None and track_id == target_track_id:
                     center_x = (x1 + x2) / 2
                     center_y = (y1 + y2) / 2
@@ -210,7 +200,6 @@ if video_file:
     tfile.close()
 
     try:
-        # قراءة أول فريم
         cap = cv2.VideoCapture(tfile.name)
         ret, first_frame = cap.read()
         cap.release()
@@ -222,7 +211,6 @@ if video_file:
             if not detections:
                 st.error("No Detection")
             else:
-                # رسم البوكسات على الفريم مع display IDs
                 display_frame = first_frame.copy()
                 for det in detections:
                     bbox = det['bbox']
@@ -233,12 +221,10 @@ if video_file:
 
                 st.image(cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB), caption="Select Player ID")
 
-                # عرض قائمة الـ display IDs لاختيار المستخدم
                 options = [f"ID {d['display_id']} - bbox {d['bbox']}" for d in detections]
                 choice = st.selectbox("Select Player", options)
 
                 if st.button("Start Analysis", type="primary"):
-                    # بحث عن الـbbox المختار
                     sel_idx = options.index(choice)
                     selected_bbox = detections[sel_idx]['bbox']
 
@@ -251,7 +237,6 @@ if video_file:
                         speed = calculate_speed_from_positions(target_positions, pool_length, fps)
 
                         st.markdown("### Results")
-
                         col1, col2, col3 = st.columns(3)
                         with col1:
                             st.metric("🏃‍♂️ Speed", f"{speed:.2f}", "m/s")
@@ -261,28 +246,9 @@ if video_file:
                         with col3:
                             st.metric("Frames Tracked", f"{len(target_positions)}")
 
-                        st.markdown("### Tracking Path")
-                        if len(target_positions) > 1:
-                            x_coords = [pos['x'] for pos in target_positions]
-                            y_coords = [pos['y'] for pos in target_positions]
-
-                            fig = go.Figure()
-                            fig.add_trace(go.Scatter(
-                                x=x_coords, y=y_coords,
-                                mode='lines+markers',
-                                name=f'selected (track_id {found_track_id})',
-                                line=dict(width=2),
-                                marker=dict(size=4)
-                            ))
-                            fig.update_layout(
-                                title=f"Tracking (track_id {found_track_id})",
-                                xaxis_title="Horizontal",
-                                yaxis_title="Vertical",
-                                showlegend=True
-                            )
-                            st.plotly_chart(fig, use_container_width=True)
-
-                        st.success(f"Matched tracker ID: {found_track_id}" if found_track_id is not None else "No tracker ID matched (but positions collected).")
+                        st.success(
+                            f"Matched tracker ID: {found_track_id}" if found_track_id is not None else "No tracker ID matched (but positions collected)."
+                        )
                     else:
                         st.error("Error")
 
